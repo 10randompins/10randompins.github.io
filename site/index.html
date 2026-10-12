@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>10 Random Pins</title>
+  <meta name="description" content="Pick a country, drop 10 random pins, and tour them in Street View.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23ff5a5f' d='M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z'/><circle cx='12' cy='9' r='2.6' fill='white'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="map" aria-label="World map"></div>
+
+  <!-- Command panel -->
+  <section class="panel" id="panel">
+    <header class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/><circle cx="12" cy="9" r="2.6"/></svg>
+      </div>
+      <div>
+        <h1>10 Random Pins</h1>
+        <p class="tagline">Pick a country. We drop 10 pins where people live.</p>
+      </div>
+    </header>
+
+    <div class="combo" id="combo">
+      <svg class="combo-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="countryInput" type="text" placeholder="Search a country…" autocomplete="off"
+             role="combobox" aria-expanded="false" aria-controls="countryList" aria-autocomplete="list">
+      <button class="combo-clear" id="comboClear" type="button" aria-label="Clear" hidden>×</button>
+      <ul class="combo-list" id="countryList" role="listbox" hidden></ul>
+    </div>
+    <p class="hint">…or click any country on the map.</p>
+
+    <div class="actions">
+      <button class="btn primary" id="dropBtn" type="button" disabled>
+        <span class="btn-label">Drop 10 pins</span>
+      </button>
+      <button class="btn ghost" id="randomBtn" type="button" title="Surprise me">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+        Surprise me
+      </button>
+    </div>
+
+    <div class="status" id="status" hidden>
+      <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+      <span id="statusText"></span>
+    </div>
+
+    <details class="how">
+      <summary>How are pins chosen?</summary>
+      <ul>
+        <li><b>Major metros</b> (metro pop. 400k+) get most pins, suburbs included.</li>
+        <li><b>Towns within 50 miles</b> of those metros come next.</li>
+        <li><b>Towns within 50 miles of landmarks</b> &amp; tourist spots (UNESCO sites, national parks, roadside icons).</li>
+        <li><b>Small countries and states</b> (under ~1M people) are fully eligible.</li>
+        <li>Every pin snaps to official Google Street View imagery near a town, so you see streets and buildings, not empty fields.</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- Filmstrip of results -->
+  <section class="strip" id="strip" hidden>
+    <div class="strip-head">
+      <div>
+        <h2 id="stripTitle">10 pins</h2>
+        <p id="stripSub"></p>
+      </div>
+      <div class="strip-actions">
+        <button class="btn ghost small" id="rerollBtn" type="button">Re-roll</button>
+        <button class="btn primary small" id="slideshowBtn" type="button">▶ Slideshow</button>
+      </div>
+    </div>
+    <ol class="cards" id="cards"></ol>
+  </section>
+
+  <!-- Street View slideshow -->
+  <div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-label="Street View slideshow">
+    <div class="viewer-pano" id="pano"></div>
+    <div class="viewer-top">
+      <div class="viewer-count"><span id="vIndex">1</span> / <span id="vTotal">10</span></div>
+      <div class="viewer-caption">
+        <h3 id="vTitle"></h3>
+        <p id="vSub"></p>
+      </div>
+      <div class="viewer-tools">
+        <button class="icon-btn" id="vPlay" type="button" aria-label="Autoplay" title="Autoplay (space)">▶</button>
+        <a class="icon-btn" id="vOpen" target="_blank" rel="noopener" aria-label="Open in Google Maps" title="Open in Google Maps">↗</a>
+        <button class="icon-btn" id="vClose" type="button" aria-label="Close" title="Close (Esc)">✕</button>
+      </div>
+    </div>
+    <button class="nav prev" id="vPrev" type="button" aria-label="Previous">‹</button>
+    <button class="nav next" id="vNext" type="button" aria-label="Next">›</button>
+    <div class="dots" id="vDots"></div>
+    <div class="autoplay-bar" id="vBar"></div>
+  </div>
+
+  <!-- API key setup -->
+  <div class="setup" id="setup" hidden>
+    <form class="setup-card" id="setupForm">
+      <div class="logo big" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7z"/><circle cx="12" cy="9" r="2.6"/></svg>
+      </div>
+      <h2>Connect Google Maps</h2>
+      <p>This site needs a Google Maps Platform API key with <b>Maps JavaScript API</b> enabled
+         (and <b>Street View Static API</b> for thumbnails). Paste it below. It is saved in this browser only.</p>
+      <input id="keyInput" type="text" placeholder="AIza…" spellcheck="false" autocomplete="off" required>
+      <button class="btn primary" type="submit">Start exploring</button>
+      <p class="fine">Site owner? Put the key in <code>config.js</code> instead so visitors skip this step.</p>
+    </form>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="config.js"></script>
+  <script src="config.local.js" onerror="void 0"></script>
+  <script src="app.js"></script>
+</body>
+</html>
