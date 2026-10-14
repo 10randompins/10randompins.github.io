@@ -12,9 +12,10 @@
   // Place bitmask (see tools/build_data.py) and how often each tier is chosen.
   const TIERS = [
     { bit: 1, weight: 0.55, label: "Metro" },
-    { bit: 2, weight: 0.20, label: "Near metro" },
-    { bit: 4, weight: 0.15, label: "Landmark" },
-    { bit: 8, weight: 0.10, label: "Small region" },
+    { bit: 2, weight: 0.15, label: "Near metro" },
+    { bit: 16, weight: 0.12, label: "Regional town" },
+    { bit: 4, weight: 0.12, label: "Landmark" },
+    { bit: 8, weight: 0.06, label: "Small region" },
   ];
 
   // Metro-tier towns: favour big core cities and fall off with distance from the main city,
@@ -509,6 +510,7 @@
       case 1: return `${t.metro || t.name} metro area`;
       case 2: return `Within 50 mi of ${t.metro}`;
       case 4: return `Near ${t.landmark}`;
+      case 16: return `Regional town · ${c && c.regions && t.region ? t.region : c ? c.name : ""}`;
       default: return `Small-region pick · ${c && c.regions && t.region ? t.region : c ? c.name : ""}`;
     }
   }

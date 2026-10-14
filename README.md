@@ -6,10 +6,11 @@ Pins aren't truly random. They favour places where people live:
 
 | Tier | Share of picks | What it covers |
 |---|---|---|
-| Metro | 55% | Towns within 30 km of a major metro (est. metro pop. 400k+), weighted toward downtown: ~75% of these land within 8 km of the main city's centre, and big cities can take up to 3 pins |
-| Near metro | 20% | Towns within 50 mi of a major metro |
-| Landmark | 15% | Towns within 50 mi of a landmark / tourist spot (UNESCO sites, national parks, curated roadside icons) |
-| Small region | 10% (60% if the country has no major metro) | Every town in a country or state/province with under ~1M people |
+| Metro | 55% | Towns within 30 km of a major metro (est. metro pop. 400k+, or a city of 150k+), weighted toward downtown: ~75% of these land within 8 km of the main city's centre, and big cities can take up to 3 pins |
+| Near metro | 15% | Towns within 50 mi of a major metro |
+| Regional town | 12% | Towns of 15k+ that aren't in or near a major metro (e.g. Tupelo, Starkville, Meridian) |
+| Landmark | 12% | Towns within 50 mi of a landmark / tourist spot (UNESCO sites, national parks, curated roadside icons) |
+| Small region | 6% (60% if the area has no major metro) | Every town in a country or state/province with under ~1M people |
 
 Each pick is jittered around the town centre and snapped to the nearest **official** Google Street View panorama (user-uploaded photospheres are excluded), and must fall inside the chosen country.
 

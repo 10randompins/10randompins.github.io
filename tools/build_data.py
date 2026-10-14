@@ -20,6 +20,7 @@ Every town gets a bitmask of the reasons it is eligible:
   2 NEAR_METRO within NEAR_KM (50 mi) of a metro anchor
   4 LANDMARK   within NEAR_KM (50 mi) of a landmark / tourist spot
   8 SMALL      the whole country or state/province is small enough to be fully eligible
+ 16 TOWN       a regional town (pop >= TOWN_MIN_POP) that is not in or near a metro
 Towns with no reason are dropped. The browser picks a tier first, then a town.
 """
 import csv, io, json, math, os, re, sys, zipfile
@@ -32,6 +33,8 @@ OUT = os.path.join(ROOT, "site", "data")
 METRO_MIN_POP = 400_000      # metro population that counts as a "major metro"
 METRO_CLUSTER_KM = 35        # radius used to estimate a metro population
 METRO_SEED_POP = 50_000      # only places this big can anchor a metro
+METRO_CITY_POP = 150_000     # a city this big is a metro by itself (town sums undercount sprawl)
+TOWN_MIN_POP = 15_000        # standalone towns this big are eligible on their own
 METRO_CORE_KM = 30           # towns this close to an anchor count as "in the metro"
 NEAR_KM = 80.5               # 50 miles
 SMALL_REGION_POP = 1_000_000 # countries / states under this are fully eligible
@@ -39,7 +42,7 @@ MIN_TOWN_POP = 500
 SEAT_CODES = {"PPLC", "PPLA", "PPLA2"}
 BAD_CODES = {"PPLX", "PPLH", "PPLQ", "PPLW", "PPLCH", "PPLR"}
 
-METRO, NEAR_METRO, LANDMARK, SMALL = 1, 2, 4, 8
+METRO, NEAR_METRO, LANDMARK, SMALL, TOWN = 1, 2, 4, 8, 16
 
 
 def haversine(a_lat, a_lng, b_lat, b_lng):
@@ -152,7 +155,7 @@ def find_metro_anchors(towns):
     anchors = []
     for s in seeds:
         total = sum(it[2]["pop"] for _, it in grid.near(s["lat"], s["lng"], METRO_CLUSTER_KM))
-        if total >= METRO_MIN_POP:
+        if total >= METRO_MIN_POP or s["pop"] >= METRO_CITY_POP:
             s["metro_pop"] = total
             anchors.append(s)
     # Name each anchor after the biggest city in its cluster, so suburbs read "Atlanta metro".
@@ -309,6 +312,8 @@ def main():
         if hit:
             mask |= LANDMARK
             lm = hit[1][2]
+        if t["pop"] >= TOWN_MIN_POP and not mask & (METRO | NEAR_METRO):
+            mask |= TOWN
         if region_small(t):
             mask |= SMALL
         if mask:
@@ -342,7 +347,7 @@ def main():
             json.dump({"iso": cc, "name": cname, "strings": strings, "places": places},
                       f, ensure_ascii=False, separators=(",", ":"))
         counts = {k: sum(1 for p in places if p[3] & v)
-                  for k, v in (("metro", METRO), ("near", NEAR_METRO), ("landmark", LANDMARK), ("small", SMALL))}
+                  for k, v in (("metro", METRO), ("near", NEAR_METRO), ("landmark", LANDMARK), ("small", SMALL), ("town", TOWN))}
         entry = {"iso": cc, "name": cname, "places": len(places), **counts}
         if regs:
             kept = [r for r in regs if reg_count[r["id"]]]
