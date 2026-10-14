@@ -5,6 +5,7 @@ Inputs (in ./raw, see README for download commands):
   countryInfo.txt         GeoNames country populations
   admin1CodesASCII.txt    GeoNames state / province names
   countries50m.geojson    Natural Earth 1:50m country borders
+  states50m.geojson       Natural Earth 1:50m states / provinces (US, CA, AU, BR, IN, ...)
   unesco.csv, parks.csv, attractions.csv, iso.csv   Wikidata landmark exports
   tools/landmarks_extra.csv                         hand-curated landmarks
 
@@ -12,6 +13,7 @@ Outputs (in ./site/data):
   countries.geojson       simplified borders, properties {iso, name}
   index.json              list of countries that have a pin pool
   c/<ISO>.json            pin pool for one country
+  regions/<ISO>.geojson   state / province borders, for countries in states50m.geojson
 
 Every town gets a bitmask of the reasons it is eligible:
   1 METRO      within METRO_CORE_KM of a metro anchor (metro pop >= 400k)
@@ -167,6 +169,7 @@ def find_metro_anchors(towns):
             seen.add(id(top))
             top = top["parent"]
         a["metro_name"] = top["name"]
+        a["top"] = top
     return anchors
 
 
@@ -183,6 +186,63 @@ def simplify_ring(ring, tol=0.01):
     return out if len(out) >= 4 else None
 
 
+def clean_polys(geometry):
+    """GeoJSON (Multi)Polygon -> simplified list of polygons."""
+    polys = geometry["coordinates"] if geometry["type"] == "MultiPolygon" else [geometry["coordinates"]]
+    out = []
+    for poly in polys:
+        rings = [r for r in (simplify_ring(r) for r in poly) if r]
+        if rings and len(rings[0]) >= 4:
+            out.append(rings)
+    return out
+
+
+def in_ring(ring, lat, lng):
+    inside = False
+    j = len(ring) - 1
+    for i in range(len(ring)):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if (yi > lat) != (yj > lat) and lng < (xj - xi) * (lat - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def load_regions():
+    """States / provinces keyed by country: {cc: [{id, name, gn, polys, bbox}]}."""
+    with open(os.path.join(RAW, "states50m.geojson"), encoding="utf-8") as f:
+        gj = json.load(f)
+    out = defaultdict(list)
+    for ft in gj["features"]:
+        p = ft["properties"]
+        cc, gn = p.get("iso_a2"), p.get("gn_a1_code") or ""
+        polys = clean_polys(ft["geometry"])
+        if not cc or not polys:
+            continue
+        suffix = gn.split(".", 1)[1] if "." in gn else ""
+        suffix = suffix or p.get("postal") or p.get("adm1_code")
+        xs = [x for poly in polys for x, _ in poly[0]]
+        ys = [y for poly in polys for _, y in poly[0]]
+        out[cc].append({"id": f"{cc}-{suffix}", "name": p["name"], "gn": gn, "polys": polys,
+                        "bbox": (min(xs), min(ys), max(xs), max(ys))})
+    return out
+
+
+def region_of(t, regions, by_gn):
+    """GeoNames admin1 code first; point-in-polygon for the few codes that don't line up."""
+    r = by_gn.get(f'{t["cc"]}.{t["a1"]}')
+    if r:
+        return r
+    for r in regions:
+        x0, y0, x1, y1 = r["bbox"]
+        if x0 <= t["lng"] <= x1 and y0 <= t["lat"] <= y1:
+            for poly in r["polys"]:
+                if in_ring(poly[0], t["lat"], t["lng"]) and not any(in_ring(h, t["lat"], t["lng"]) for h in poly[1:]):
+                    return r
+    return None
+
+
 def build_borders(have_pool, info):
     with open(os.path.join(RAW, "countries50m.geojson"), encoding="utf-8") as f:
         gj = json.load(f)
@@ -192,13 +252,7 @@ def build_borders(have_pool, info):
         iso = p.get("ISO_A2_EH") or p.get("ISO_A2")
         if not iso or iso == "-99":
             continue
-        g = ft["geometry"]
-        polys = g["coordinates"] if g["type"] == "MultiPolygon" else [g["coordinates"]]
-        new_polys = []
-        for poly in polys:
-            rings = [r for r in (simplify_ring(r) for r in poly) if r]
-            if rings and len(rings[0]) >= 4:
-                new_polys.append(rings)
+        new_polys = clean_polys(ft["geometry"])
         if not new_polys:
             continue
         name = info.get(iso, {}).get("name") or p.get("NAME")
@@ -214,10 +268,12 @@ def build_borders(have_pool, info):
 
 def main():
     os.makedirs(os.path.join(OUT, "c"), exist_ok=True)
+    os.makedirs(os.path.join(OUT, "regions"), exist_ok=True)
     info = load_countries()
     a1names = load_admin1()
     towns = load_towns()
     landmarks = load_landmarks()
+    regions = load_regions()
     anchors = find_metro_anchors(towns)
     print(f"{len(towns)} towns, {len(landmarks)} landmarks, {len(anchors)} metro anchors")
 
@@ -241,12 +297,14 @@ def main():
 
     by_cc = defaultdict(list)
     for t in towns:
-        mask, metro, lm = 0, "", ""
+        mask, metro, lm, dm = 0, "", "", -1
         hit = agrid.nearest(t["lat"], t["lng"], NEAR_KM)
         if hit:
             d, a = hit[0], hit[1][2]
             metro = a["metro_name"]
             mask |= METRO if d <= METRO_CORE_KM else NEAR_METRO
+            # Distance to the metro's main city, so pins can favour downtowns over suburbs.
+            dm = round(haversine(t["lat"], t["lng"], a["top"]["lat"], a["top"]["lng"]), 1)
         hit = lgrid.nearest(t["lat"], t["lng"], NEAR_KM)
         if hit:
             mask |= LANDMARK
@@ -254,7 +312,7 @@ def main():
         if region_small(t):
             mask |= SMALL
         if mask:
-            by_cc[t["cc"]].append((t, mask, metro, lm))
+            by_cc[t["cc"]].append((t, mask, metro, lm, dm))
 
     index = []
     for cc, rows in sorted(by_cc.items()):
@@ -266,18 +324,36 @@ def main():
                 strings.append(x)
             return sidx[x]
 
+        regs = regions.get(cc, [])
+        by_gn = {r["gn"]: r for r in regs}
+        reg_count = defaultdict(int)
         places = []
-        for t, mask, metro, lm in rows:
+        for t, mask, metro, lm, dm in rows:
             region = a1names.get(f'{cc}.{t["a1"]}', "")
+            r = region_of(t, regs, by_gn) if regs else None
+            if r:
+                region = r["name"]
+                reg_count[r["id"]] += 1
+            # [lat, lng, pop, tier mask, name, region name, metro, landmark, region id, km to metro centre]
             places.append([round(t["lat"], 4), round(t["lng"], 4), t["pop"], mask,
-                           s(t["name"]), s(region), s(metro), s(lm)])
+                           s(t["name"]), s(region), s(metro), s(lm), s(r["id"] if r else ""), dm])
         cname = info.get(cc, {}).get("name", cc)
         with open(os.path.join(OUT, "c", f"{cc}.json"), "w", encoding="utf-8") as f:
             json.dump({"iso": cc, "name": cname, "strings": strings, "places": places},
                       f, ensure_ascii=False, separators=(",", ":"))
         counts = {k: sum(1 for p in places if p[3] & v)
                   for k, v in (("metro", METRO), ("near", NEAR_METRO), ("landmark", LANDMARK), ("small", SMALL))}
-        index.append({"iso": cc, "name": cname, "places": len(places), **counts})
+        entry = {"iso": cc, "name": cname, "places": len(places), **counts}
+        if regs:
+            kept = [r for r in regs if reg_count[r["id"]]]
+            entry["regions"] = sorted(({"id": r["id"], "name": r["name"], "places": reg_count[r["id"]]}
+                                       for r in kept), key=lambda r: r["name"])
+            features = [{"type": "Feature", "properties": {"id": r["id"], "name": r["name"]},
+                         "geometry": {"type": "MultiPolygon", "coordinates": r["polys"]}} for r in kept]
+            with open(os.path.join(OUT, "regions", f"{cc}.geojson"), "w", encoding="utf-8") as f:
+                json.dump({"type": "FeatureCollection", "features": features},
+                          f, ensure_ascii=False, separators=(",", ":"))
+        index.append(entry)
 
     borders = build_borders({r["iso"] for r in index}, info)
     index = [r for r in index if r["iso"] in borders]

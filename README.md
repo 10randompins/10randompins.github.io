@@ -1,12 +1,12 @@
 # 10 Random Pins
 
-Pick a country (click the map or search), and the site drops 10 weighted-random pins on it and tours them in Google Street View.
+Pick a country (click the map or search), or a single state / province in the US, Canada, Australia, Brazil, India, Indonesia, South Africa, Russia or China, and the site drops 10 weighted-random pins on it and tours them in Google Street View.
 
 Pins aren't truly random. They favour places where people live:
 
 | Tier | Share of picks | What it covers |
 |---|---|---|
-| Metro | 55% | Towns within 30 km of a major metro (est. metro pop. 400k+), suburbs included |
+| Metro | 55% | Towns within 30 km of a major metro (est. metro pop. 400k+), weighted toward downtown: ~75% of these land within 8 km of the main city's centre, and big cities can take up to 3 pins |
 | Near metro | 20% | Towns within 50 mi of a major metro |
 | Landmark | 15% | Towns within 50 mi of a landmark / tourist spot (UNESCO sites, national parks, curated roadside icons) |
 | Small region | 10% (60% if the country has no major metro) | Every town in a country or state/province with under ~1M people |
@@ -40,12 +40,13 @@ mkdir -p raw && cd raw
 curl -LO https://download.geonames.org/export/dump/cities1000.zip
 curl -LO https://download.geonames.org/export/dump/countryInfo.txt
 curl -LO https://download.geonames.org/export/dump/admin1CodesASCII.txt
+curl -L -o states50m.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson
 curl -L -o countries50m.geojson https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson
 cd .. && sh tools/wikidata_queries.sh && cd raw
 cd .. && python tools/build_data.py
 ```
 
-Hand-picked landmarks (e.g. the Superman statue in Metropolis, IL) live in `tools/landmarks_extra.csv`; add rows and rebuild. Tuning knobs (metro size, 50-mile radius, small-region threshold) are constants at the top of `build_data.py`; tier shares are `TIERS` in `site/app.js`.
+Hand-picked landmarks (e.g. the Superman statue in Metropolis, IL) live in `tools/landmarks_extra.csv`; add rows and rebuild. Tuning knobs (metro size, 50-mile radius, small-region threshold) are constants at the top of `build_data.py`; tier shares (`TIERS`) and the downtown weighting (`METRO_*`) are at the top of `site/app.js`.
 
 ## Deploy
 

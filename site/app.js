@@ -17,6 +17,16 @@
     { bit: 8, weight: 0.10, label: "Small region" },
   ];
 
+  // Metro-tier towns: favour big core cities and fall off with distance from the main city,
+  // so ~75% of metro pins land within 8 km of downtown rather than in the suburbs.
+  const METRO_POP_EXP = 0.75;
+  const METRO_FALLOFF_KM = 8;
+  const METRO_MIN_SEP_KM = 4;      // metro pins can be this close to each other
+  const MULTI_PIN_POP = 100000;    // cities this big can receive more than one pin...
+  const MAX_PER_CITY = 3;          // ...up to this many
+
+  const REGION_LABEL = { CA: "Province", ID: "Province", ZA: "Province", CN: "Province", RU: "Region" };
+
   // Countries with broad official Street View coverage, used by "Surprise me".
   const SV_GOOD = new Set(("US CA MX BR AR CL CO PE EC UY BO GT DO PR GB IE FR ES PT IT DE NL BE LU CH AT DK NO SE FI IS " +
     "EE LV LT PL CZ SK HU SI HR RS ME AL MK BG RO GR TR UA JP KR TW TH MY SG ID PH KH LK BD BT MN KZ KG IL JO AE " +
@@ -33,6 +43,7 @@
     map: null, sv: null, pano: null,
     index: [], byIso: new Map(), borders: new Map(), pools: new Map(),
     selected: null, hovered: null,
+    region: null, regionGeo: new Map(), regionFeatures: new Map(), regionLayer: null,
     results: [], markers: [], running: false, runId: 0,
     viewerIndex: 0, autoplay: null,
   };
@@ -106,8 +117,12 @@
     });
 
     setupCombo();
+    $("regionSelect").addEventListener("change", (e) => selectRegion(e.target.value || null, true));
+
+    // "#US" selects a country, "#US-TN" a state within it.
     const fromHash = decodeURIComponent(location.hash.slice(1)).toUpperCase();
-    if (state.byIso.has(fromHash)) selectCountry(fromHash, true);
+    const cc = fromHash.split("-")[0];
+    if (state.byIso.has(cc)) selectCountry(cc, true, fromHash.includes("-") ? fromHash : null);
   }
 
   function styleFeature(f) {
@@ -118,7 +133,7 @@
       clickable: usable,
       cursor: usable ? "pointer" : "default",
       fillColor: "#ff5a5f",
-      fillOpacity: selected ? 0.10 : 0,
+      fillOpacity: selected && !state.region ? 0.10 : 0,
       strokeColor: selected ? "#ff5a5f" : "#ffffff",
       strokeOpacity: selected ? 0.95 : 0.12,
       strokeWeight: selected ? 2 : 0.7,
@@ -175,23 +190,97 @@
 
   /* ----------------------------------------------------------- selection */
 
-  function selectCountry(iso, fly) {
+  function selectCountry(iso, fly, regionId = null) {
     const c = state.byIso.get(iso);
     if (!c) return;
+    const changed = iso !== state.selected;
     state.selected = iso;
+    state.region = null;
     $("countryInput").value = c.name;
     $("comboClear").hidden = false;
     $("dropBtn").disabled = false;
-    $("dropBtn").querySelector(".btn-label").textContent = `Drop 10 pins in ${c.name}`;
-    history.replaceState(null, "", "#" + iso);
-    state.map.data.setStyle(styleFeature);
-    if (fly) fitCountry(iso);
+    if (changed) setupRegions(c);
+    $("regionSelect").value = "";
+    updateSelectionUi();
+    if (fly) fitArea();
     getPool(iso); // warm the cache
+    if (regionId && c.regions) loadRegions(iso).then(() => selectRegion(regionId, true));
   }
 
-  // Zoom to the country's largest landmass so far-flung islands don't shrink the view.
-  function fitCountry(iso) {
-    const f = state.borders.get(iso);
+  // Shows the state / province picker and borders for countries that have them.
+  function setupRegions(c) {
+    if (state.regionLayer) { state.regionLayer.setMap(null); state.regionLayer = null; }
+    state.regionFeatures = new Map();
+    $("regionWrap").hidden = !c.regions;
+    $("hint").textContent = c.regions ? "…then click a state on the map, or pick one below." : "…or click any country on the map.";
+    if (!c.regions) return;
+    $("regionLabel").textContent = REGION_LABEL[c.iso] || "State";
+    const sel = $("regionSelect");
+    sel.innerHTML = "";
+    sel.appendChild(new Option(`All of ${c.name}`, ""));
+    c.regions.forEach((r) => sel.appendChild(new Option(r.name, r.id)));
+    loadRegions(c.iso).then((fc) => {
+      if (state.selected !== c.iso) return;
+      fc.features.forEach((f) => state.regionFeatures.set(f.properties.id, f));
+      const layer = new google.maps.Data({ map: state.map });
+      layer.addGeoJson(fc, { idPropertyName: "id" });
+      layer.setStyle(styleRegion);
+      layer.addListener("mouseover", (e) => { layer.revertStyle(); if (e.feature.getId() !== state.region) layer.overrideStyle(e.feature, { fillOpacity: 0.14, strokeOpacity: 0.7, strokeColor: "#ff8a4c" }); });
+      layer.addListener("mouseout", () => layer.revertStyle());
+      layer.addListener("click", (e) => selectRegion(e.feature.getId(), true));
+      state.regionLayer = layer;
+    });
+  }
+
+  function loadRegions(iso) {
+    if (!state.regionGeo.has(iso)) state.regionGeo.set(iso, fetch(`data/regions/${iso}.geojson`).then((r) => r.json()));
+    return state.regionGeo.get(iso).then((fc) => {
+      if (!state.regionFeatures.size && state.selected === iso) fc.features.forEach((f) => state.regionFeatures.set(f.properties.id, f));
+      return fc;
+    });
+  }
+
+  function styleRegion(f) {
+    const selected = f.getId() === state.region;
+    return {
+      clickable: true, cursor: "pointer", zIndex: selected ? 4 : 3,
+      fillColor: "#ff5a5f", fillOpacity: selected ? 0.12 : 0,
+      strokeColor: selected ? "#ff5a5f" : "#ffffff", strokeOpacity: selected ? 0.95 : 0.22, strokeWeight: selected ? 2 : 0.6,
+    };
+  }
+
+  function selectRegion(id, fly) {
+    const c = state.byIso.get(state.selected);
+    if (!c || (id && !(c.regions || []).some((r) => r.id === id))) id = null;
+    state.region = id;
+    $("regionSelect").value = id || "";
+    updateSelectionUi();
+    if (fly) fitArea();
+  }
+
+  // The area pins are dropped in: a whole country, or one state of it.
+  function area() {
+    const c = state.byIso.get(state.selected);
+    const r = state.region && c.regions.find((x) => x.id === state.region);
+    return {
+      country: c,
+      name: r ? r.name : c.name,
+      fullName: r ? `${r.name}, ${c.name}` : c.name,
+      feature: r ? state.regionFeatures.get(r.id) : state.borders.get(c.iso),
+    };
+  }
+
+  function updateSelectionUi() {
+    const a = area();
+    $("dropBtn").querySelector(".btn-label").textContent = `Drop 10 pins in ${a.name}`;
+    history.replaceState(null, "", "#" + (state.region || state.selected));
+    state.map.data.setStyle(styleFeature);
+    if (state.regionLayer) state.regionLayer.setStyle(styleRegion);
+  }
+
+  // Zoom to the area's largest landmass so far-flung islands don't shrink the view.
+  function fitArea() {
+    const f = area().feature;
     if (!f) return;
     let best = null, bestArea = -1;
     for (const poly of f.geometry.coordinates) {
@@ -228,11 +317,11 @@
         return r.json();
       }).then((d) => {
         const S = d.strings;
-        d.towns = d.places.map(([lat, lng, pop, mask, n, r, m, l], i) => ({
-          i, lat, lng, pop, mask, name: S[n], region: S[r], metro: S[m], landmark: S[l],
+        d.towns = d.places.map(([lat, lng, pop, mask, n, r, m, l, rid, dm], i) => ({
+          i, lat, lng, pop, mask, dm, name: S[n], region: S[r], metro: S[m], landmark: S[l], rid: S[rid],
           w: Math.pow(pop, 0.5),
+          wMetro: Math.pow(pop, METRO_POP_EXP) * Math.exp(-Math.max(dm, 0) / METRO_FALLOFF_KM),
         }));
-        d.hasMetro = d.towns.some((t) => t.mask & 3);
         return d;
       }));
     }
@@ -256,29 +345,39 @@
     return arr[arr.length - 1];
   }
 
-  // Picks a tier by weight, then a town in it weighted by sqrt(population),
-  // avoiding towns already tried and towns too close to pins already placed.
-  function pickTown(pool, ctx) {
+  // Picks a tier by weight, then a town in it (metro towns by size and closeness to
+  // downtown, others by sqrt(population)), avoiding towns already tried and towns too
+  // close to pins already placed.
+  function pickTown(towns, hasMetro, ctx) {
     for (let relax = 0; relax < 6; relax++) {
       const minSep = ctx.minSep / Math.pow(2, relax);
-      const ok = (t) => !ctx.tried.has(t.i) && ctx.placed.every((p) => km(p, t) >= minSep);
-      const tiers = TIERS.map((tier) => ({ tier, towns: pool.towns.filter((t) => (t.mask & tier.bit) && ok(t)) }))
+      // Metro pins may sit closer together, and a big city can hold up to MAX_PER_CITY
+      // pins (they still land on different streets; see the pano spacing check in dropPins).
+      const ok = (t, metro) => {
+        if (ctx.tried.has(t.i)) return false;
+        if (metro && t.pop >= MULTI_PIN_POP) return (ctx.perTown.get(t.i) || 0) < MAX_PER_CITY;
+        const sep = metro ? Math.min(minSep, METRO_MIN_SEP_KM) : minSep;
+        return ctx.placed.every((p) => km(p, t) >= sep);
+      };
+      const tiers = TIERS.map((tier) => ({ tier, towns: towns.filter((t) => (t.mask & tier.bit) && ok(t, tier.bit === 1)) }))
         .filter((x) => x.towns.length);
       if (!tiers.length) continue;
-      // With no major metro (e.g. Belize), "anywhere in a town" leads instead of trailing.
-      const weight = (x) => (x.tier.bit === 8 && !pool.hasMetro ? 0.6 : x.tier.weight);
-      const { tier, towns } = weightedPick(tiers, weight);
-      const town = weightedPick(towns, (t) => t.w);
+      // With no major metro (e.g. Belize, Wyoming), "anywhere in a town" leads instead of trailing.
+      const weight = (x) => (x.tier.bit === 8 && !hasMetro ? 0.6 : x.tier.weight);
+      const { tier, towns: candidates } = weightedPick(tiers, weight);
+      const town = weightedPick(candidates, tier.bit === 1 ? (t) => t.wMetro : (t) => t.w);
       ctx.tried.add(town.i);
       return { town, tier };
     }
     return null;
   }
 
-  // Random point near the town centre; bigger towns get a wider spread.
-  function jitter(town) {
+  // Random point near the town centre; bigger towns get a wider spread. Metro picks
+  // cluster toward the centre (density falls off with distance) instead of spreading evenly.
+  function jitter(town, tier) {
     const maxKm = Math.min(6, 0.4 + Math.sqrt(town.pop) / 150);
-    const d = maxKm * Math.sqrt(Math.random());
+    const u = Math.random();
+    const d = maxKm * (tier.bit === 1 ? u : Math.sqrt(u));
     const a = Math.random() * 2 * Math.PI;
     return {
       lat: town.lat + (d / 111) * Math.cos(a),
@@ -300,8 +399,7 @@
     }
   }
 
-  function insideCountry(iso, pt) {
-    const f = state.borders.get(iso);
+  function insideFeature(f, pt) {
     if (!f) return true;
     return f.geometry.coordinates.some((poly) => inRing(poly[0], pt) && !poly.slice(1).some((h) => inRing(h, pt)));
   }
@@ -327,36 +425,43 @@
     if (!iso || state.running) return;
     const runId = ++state.runId;
     state.running = true;
+    const regionId = state.region;
     clearResults();
     setBusy(true);
     setStatus(0, "Picking towns…");
-    fitCountry(iso);
+    fitArea();
     renderSkeletons();
 
     let pool;
     try { pool = await getPool(iso); } catch { setBusy(false); state.running = false; return toast("No town data for this country."); }
+    if (regionId) await loadRegions(iso);
 
-    const f = state.borders.get(iso);
-    const b = ringBounds(f ? f.geometry.coordinates.flatMap((p) => p[0]) : pool.towns.map((t) => [t.lng, t.lat]));
+    const f = area().feature;
+    const towns = regionId ? pool.towns.filter((t) => t.rid === regionId) : pool.towns;
+    const hasMetro = towns.some((t) => t.mask & 3);
+    const b = ringBounds(f ? f.geometry.coordinates.flatMap((p) => p[0]) : towns.map((t) => [t.lng, t.lat]));
     const diagKm = km({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e });
-    const ctx = { tried: new Set(), placed: [], panoIds: new Set(), minSep: Math.max(2, Math.min(40, diagKm / 25)) };
+    const ctx = { tried: new Set(), placed: [], panoIds: new Set(), perTown: new Map(), minSep: Math.max(2, Math.min(40, diagKm / 25)) };
     let lookups = 0;
 
     const worker = async () => {
       while (state.runId === runId && state.results.length < PIN_COUNT && lookups < MAX_LOOKUPS) {
-        const pick = pickTown(pool, ctx);
+        const pick = pickTown(towns, hasMetro, ctx);
         if (!pick) return;
         const { town, tier } = pick;
         lookups++;
-        let data = await findPano(jitter(town), 400);
+        let data = await findPano(jitter(town, tier), 400);
         if (!data) { lookups++; data = await findPano({ lat: town.lat, lng: town.lng }, 1500); }
         if (state.runId !== runId || state.results.length >= PIN_COUNT) return;
         if (!data || !data.location || ctx.panoIds.has(data.location.pano)) continue;
         const loc = { lat: data.location.latLng.lat(), lng: data.location.latLng.lng() };
-        if (!insideCountry(iso, loc)) continue;
-        if (ctx.placed.some((p) => km(p, loc) < ctx.minSep / 4)) continue;
+        // Simplified borders clip coastlines, so a pano right next to its town also counts.
+        if (!insideFeature(f, loc) && km(loc, town) > 1.5) continue;
+        if (ctx.placed.some((p) => km(p, loc) < Math.min(ctx.minSep / 4, 2))) continue;
         ctx.panoIds.add(data.location.pano);
         ctx.placed.push(loc);
+        ctx.perTown.set(town.i, (ctx.perTown.get(town.i) || 0) + 1);
+        if (town.pop >= MULTI_PIN_POP) ctx.tried.delete(town.i);
         addResult({ ...loc, panoId: data.location.pano, heading: headingFor(data), town, tier, description: data.location.description || "" });
         setStatus(state.results.length / PIN_COUNT, `Found ${state.results.length} of ${PIN_COUNT}…`);
       }
@@ -404,7 +509,7 @@
       case 1: return `${t.metro || t.name} metro area`;
       case 2: return `Within 50 mi of ${t.metro}`;
       case 4: return `Near ${t.landmark}`;
-      default: return `Small-region pick · ${c ? c.name : ""}`;
+      default: return `Small-region pick · ${c && c.regions && t.region ? t.region : c ? c.name : ""}`;
     }
   }
 
@@ -427,9 +532,8 @@
   }
 
   function renderSkeletons() {
-    const c = state.byIso.get(state.selected);
     $("strip").hidden = false;
-    $("stripTitle").textContent = `Dropping pins in ${c.name}…`;
+    $("stripTitle").textContent = `Dropping pins in ${area().name}…`;
     $("stripSub").textContent = "Finding Street View near towns and cities";
     for (let i = 0; i < PIN_COUNT; i++) {
       $("cards").appendChild(el("li", "card skeleton", `<div class="thumb"></div><div class="body"><h4></h4><p></p></div>`));
@@ -438,18 +542,18 @@
 
   function finishResults() {
     $("cards").querySelectorAll(".card.skeleton").forEach((s) => s.remove());
-    const c = state.byIso.get(state.selected);
+    const a = area();
     const n = state.results.length;
     $("status").hidden = true;
     if (!n) {
       $("strip").hidden = true;
-      return toast(`No Street View found in ${c.name}. Google's coverage there is very limited.`, 6000);
+      return toast(`No Street View found in ${a.name}. Google's coverage there is very limited.`, 6000);
     }
     document.body.classList.add("has-results");
-    $("stripTitle").innerHTML = `${flag(c.iso)} ${n} random pin${n === 1 ? "" : "s"} in ${esc(c.name)}`;
+    $("stripTitle").innerHTML = `${flag(a.country.iso)} ${n} random pin${n === 1 ? "" : "s"} in ${esc(a.fullName)}`;
     const counts = TIERS.map((t) => [t.label, state.results.filter((r) => r.tier.bit === t.bit).length]).filter(([, k]) => k);
     $("stripSub").textContent = counts.map(([l, k]) => `${k} ${l.toLowerCase()}`).join(" · ");
-    if (n < PIN_COUNT) toast(`Only found ${n} Street View spots. Coverage in ${c.name} is limited.`, 5000);
+    if (n < PIN_COUNT) toast(`Only found ${n} Street View spots. Coverage in ${a.name} is limited.`, 5000);
 
     const bounds = new google.maps.LatLngBounds();
     state.results.forEach((r) => bounds.extend(r));

@@ -33,7 +33,15 @@
       <button class="combo-clear" id="comboClear" type="button" aria-label="Clear" hidden>×</button>
       <ul class="combo-list" id="countryList" role="listbox" hidden></ul>
     </div>
-    <p class="hint">…or click any country on the map.</p>
+    <p class="hint" id="hint">…or click any country on the map.</p>
+
+    <div class="region" id="regionWrap" hidden>
+      <label for="regionSelect" id="regionLabel">State</label>
+      <div class="select">
+        <select id="regionSelect"></select>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+    </div>
 
     <div class="actions">
       <button class="btn primary" id="dropBtn" type="button" disabled>
@@ -53,7 +61,7 @@
     <details class="how">
       <summary>How are pins chosen?</summary>
       <ul>
-        <li><b>Major metros</b> (metro pop. 400k+) get most pins, suburbs included.</li>
+        <li><b>Major metros</b> (metro pop. 400k+) get most pins, mostly in and near downtown rather than the suburbs.</li>
         <li><b>Towns within 50 miles</b> of those metros come next.</li>
         <li><b>Towns within 50 miles of landmarks</b> &amp; tourist spots (UNESCO sites, national parks, roadside icons).</li>
         <li><b>Small countries and states</b> (under ~1M people) are fully eligible.</li>
